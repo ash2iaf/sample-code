@@ -1,0 +1,103 @@
+// JavaScript source code
+$(document).ready(function () {
+    SP.SOD.executeFunc("sp.js", "SP.ClientContext", function () {
+        SP.SOD.registerSod("sp.userprofiles.js", SP.Utilities.Utility.getLayoutsPageUrl("sp.userprofiles.js"));
+        SP.SOD.executeFunc("sp.userprofiles.js", "SP.UserProfiles.PeopleManager", function () {
+            _changeRequest.Initialize();
+        })
+    });
+});
+
+var _changeRequest = {
+    changeRequestID: null,
+    Initialize: function () {
+        //Initialize tabs
+        $(function () {
+            $("#tabs").tabs();
+        });
+
+        _changeRequest.GetQueryStringParams();
+
+        //Initialize date picker control
+        $(".hosDatePicker").datepicker({
+            dateFromat: 'mm/dd/yy', changeMonth: true,
+            changeYear: true, yearRange: '1990:2050',
+            minDate: 0
+        }).attr("readonly", "readonly");
+     
+    },
+
+    //Method to check query string if any 
+    GetQueryStringParams: function () {
+        // get querystring as an array split on "&"
+        var querystring = location.search.replace("?", "").split("&");
+        var queryObj = {};
+        // loop through each name-value pair and populate object
+        for (var i = 0; i < querystring.length; i++) {
+            // get name and value
+            var name = querystring[i].split("=")[0];
+            var value = querystring[i].split("=")[1];
+            // populate object
+            queryObj[name] = value;
+        }
+        if (queryObj[name] !== "" && queryObj[name] !== undefined) {
+            _changeRequest.changeRequestID = queryObj[name];
+            _changeRequest.GetChangeRequestDetails(_changeRequest.changeRequestID);
+        }
+        else {
+            //navigate to dashboard. with error something went wrong.. pls try again..
+        }
+    },
+
+    //Get change request details from list
+    GetChangeRequestDetails: function (rqstId) {
+        if (rqstId !== "" || rqstId !== null) {
+            try {
+                var context = new SP.ClientContext.get_current();
+                var list = context.get_web().get_lists().getByTitle(_hosLists.changeRequest);
+                var camlQuery = new SP.CamlQuery();
+                camlQuery.set_viewXml("<View><Query><Where><Eq><FieldRef Name='ChangeRequestID'/><Value Type='Text'>" + rqstId + "</Value></Where></Eq></Query></View>");
+                var chgRqstlistItem = list.getItems(camlQuery);
+                context.load(chgRqstlistItem);
+                context.executeQueryAsync(function () {
+                    if (chgRqstlistItem.get_count() > 0) {
+                        var listItemEnumerator = chgRqstlistItem.getEnumerator();
+                        while (listItemEnumerator.moveNext()) {
+                            var listItem = listItemEnumerator.get_current();
+                            $("#requester").attr("userid", listItem.get_item("Author").get_lookupId());
+                            var assigned = listItem.get_item("Author");
+                            var user = context.get_web().ensureUser(assigned.get_lookupValue());
+                            //var clientContext = new SP.ClientContext.get_current();
+                            //var peopleManager = new SP.UserProfiles.PeopleManager(clientContext);
+                            //var personProperties = peopleManager.getPropertiesFor(listItem.get_item("Author").get_lookupValue());
+                            //var personProperties = peopleManager.getMyProperties();
+                            //clientContext.load(personProperties);
+                            context.load(user);
+                            // clientContext.executeQueryAsync(function () {
+                            context.executeQueryAsync(function () {
+                                var displayname = user.get_title();
+                                //$("#requester").val(personProperties.get_displayName());
+                            }, function (sender, args) {
+                                _hosCommon.LogError("Search Project", "Error : " + args.get_message());
+                            })
+                        }
+                    }
+                    else {
+                        //for manual entry
+                    }
+                }, function (sender, args) {
+                    _hosCommon.LogError("Search Project", "Error : " + args.get_message());
+                });
+            }
+            catch (e) {
+                _hosCommon.LogError("Change Request", "Error : " + e.message + "\n" + e.stack);
+            }
+        }       
+    },
+
+    
+
+
+    
+}
+
