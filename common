@@ -1,0 +1,78 @@
+using Microsoft.ProjectServer.Client;
+using Microsoft.SharePoint.Client;
+using Newtonsoft.Json;
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Net;
+using System.Security;
+using System.Text;
+using System.Threading.Tasks;
+using System.Windows.Forms;
+using System.Xml;
+
+namespace MigrationUtility
+{
+   
+    class common
+    {
+     
+        public string UserName { get; set; }
+        public string Password { get; set; }
+        public string PWAUrl { get; set; }
+        public static string OutPutKey { get; set; }
+        public static int timeoutSeconds = 30;
+        public static string LogMessage { get; set; }
+        public static ProjectContext SourceProjContext { get; set; }
+        public static ProjectContext DestinationProjContext { get; set; }
+
+        public KeyValuePair<string, ProjectContext> Auth(String uname, String pwd, string siteURL)
+        {
+            ProjectContext Projcontext = new ProjectContext(siteURL);
+            Web web = Projcontext.Web;
+            SecureString passWord = new SecureString();
+            foreach (char c in pwd.ToCharArray()) passWord.AppendChar(c);
+            Projcontext.Credentials = new SharePointOnlineCredentials(uname, passWord);
+            try
+            {
+    //            var projects = Projcontext.Projects;
+    //            Projcontext.Load(projects,
+    //ps => ps.IncludeWithDefaultProperties(p => p.Name,p => p.Description, p => p.FinishDate, p => p.EnterpriseProjectType, p => p.EnterpriseProjectType.Name,
+    //    p => p.StartDate, p => p.Phase, p => p.Stage));
+    //            Projcontext.ExecuteQuery();
+
+                var securePassword = new SecureString();
+                string password = pwd;
+                foreach (char c in password.ToCharArray()) securePassword.AppendChar(c);
+                var cred = new SharePointOnlineCredentials(uname, securePassword);
+
+                string url =siteURL+ "/_api/ProjectData/TimesheetLineActualDataSet()?`$Filter=TimeByDay%20ge%20datetime%27$startDate%27%20and%20TimeByDay%20le%20datetime%27$finishDate%27&`$Select=ResourceName,TimeByDay,ActualWorkBillable,ActualOvertimeWorkBillable?format=json";
+                var req = (HttpWebRequest)WebRequest.Create(url);
+                req.Credentials = cred;
+                req.Headers["X-FORMS_BASED_AUTH_ACCEPTED"] = "f";
+
+                var resp = (HttpWebResponse)req.GetResponse();
+                var receiveStream = resp.GetResponseStream();
+
+                var readStream = new StreamReader(receiveStream, Encoding.UTF8);
+
+                var data = readStream.ReadToEnd();
+
+                XmlDocument doc = new XmlDocument();
+                doc.LoadXml(data);
+
+                string json = JsonConvert.SerializeXmlNode(doc);
+
+                return new KeyValuePair<string, ProjectContext>("True", Projcontext);
+            }
+            catch (Exception e)
+            {
+              
+                return new KeyValuePair<string, ProjectContext>("False", null);
+            }
+        }
+
+    }
+
+}
