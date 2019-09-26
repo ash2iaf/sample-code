@@ -1,0 +1,215 @@
+using Microsoft.ProjectServer.Client;
+using Microsoft.SharePoint.Client;
+using System;
+using System.Collections.Generic;
+using System.ComponentModel;
+using System.Data;
+using System.Drawing;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+using System.Windows.Forms;
+
+namespace MigrationUtility
+{
+    public partial class TaskCreation : System.Windows.Forms.Form
+    {
+        common cmn = new common();
+        CustomFields custm = new CustomFields();
+        Schedule schedule = new Schedule();
+        public TaskCreation()
+        {
+            InitializeComponent();
+        }
+
+        private void SelectTasks_Load(object sender, EventArgs e)
+        {
+
+        }
+
+        private void btn_DestLogin_Click(object sender, EventArgs e)
+        {
+            timer_login.Enabled = true;
+            common.OutPutKey = null;
+            progressBarLogin.Value = 0;
+            backgroundWorkerLogin.RunWorkerAsync();
+        }
+
+        private void backgroundWorkerLogin_DoWork(object sender, DoWorkEventArgs e)
+        {
+
+            var LoginDetails = cmn.Auth("anil.kumar@tollgroup.com", "Kqq75j44", "https://tollgroup.sharepoint.com/sites/PWADev/");
+            common.DestinationProjContext = LoginDetails.Value;
+            common.OutPutKey = LoginDetails.Key;
+            //var projectColl = common.DestinationProjContext.LoadQuery(common.SourceProjContext.Projects.Where(p => p.Name == "Alpha_UAT"));
+            //common.DestinationProjContext.ExecuteQuery();
+        }
+
+
+        private void timerLogin_Tick(object sender, EventArgs e)
+        {
+            progressBarLogin.Value = progressBarLogin.Value + 2;
+            if (common.OutPutKey == "True")
+            {
+
+                lbl_SourceErrorMessage.Text = "Sucess!!";
+                lbl_SourceErrorMessage.ForeColor = System.Drawing.Color.Green;
+                btn_Start.Visible = true;
+                progressBarLogin.Visible = true;
+                progressBarLogin.Value = 0;
+                timer_login.Enabled = false;
+            }
+            else if (common.OutPutKey == "False")
+            {
+                lbl_SourceErrorMessage.Text = "Invalid Credentials!!";
+                progressBarLogin.Value = 0;
+                timer_login.Enabled = false;
+            }
+            else if (progressBarLogin.Value > 98)
+            {
+                progressBarLogin.Value = 94;
+            }
+        }
+
+        private void btn_Start_Click(object sender, EventArgs e)
+        {
+
+            timerLog.Enabled = true;
+            progressBarCreateTask.Visible = true;
+            lbl_log.Visible = true;
+            backgroundWorkerCreateTask.RunWorkerAsync();
+        }
+        public PublishedProject CreateProject(ProjectContext projContext, string sdfNumber, string projectId, string billingCode, string projectName, string projectDescription, string managedBy, string projectManager, string reportable, DateTime startDate)
+        {
+            PublishedProject newPublishedProj = null;
+            try
+            {
+                    ProjectCreationInformation newProj = new ProjectCreationInformation();
+                    newProj.Id = Guid.NewGuid();
+                    newProj.Name = projectName;
+                    newProj.Description = projectDescription;
+                    newProj.Start = startDate;
+
+                    // Setting the EPT GUID is optional. If no EPT is specified, Project Server uses the default EPT.
+                    newProj.EnterpriseProjectTypeId = GetEptUid(projContext, "Group IT EPT");
+
+                    
+                    newPublishedProj = projContext.Projects.Add(newProj);
+                    //lbl_loginfo.Invoke((MethodInvoker)delegate { lbl_loginfo.Text = "Updating Project '" + projectName; });
+                    QueueJob qJob = projContext.Projects.Update();
+
+                    //lbl_loginfo.Invoke((MethodInvoker)delegate { lbl_loginfo.Text = "Creating project '" + projectName; });
+
+                    JobState jobState = projContext.WaitForQueue(qJob, common.timeoutSeconds);
+                    if (jobState == JobState.Success)
+                    {
+                    //lbl_loginfo.Invoke((MethodInvoker)delegate { lbl_loginfo.Text = "Project Name '" + projectName + "', is created using '" + "Group IT EPT" + "' EPT"; });
+                    //            var projects = projContext.Projects;
+                    //            projContext.Load(projects,
+                    //ps => ps.IncludeWithDefaultProperties(p => p.Name, p => p.Description, p => p.FinishDate, p => p.EnterpriseProjectType, p => p.EnterpriseProjectType.Name,
+                    //    p => p.StartDate, p => p.Phase, p => p.Stage));
+                    //            projContext.ExecuteQuery();
+                    Console.WriteLine(jobState);
+                     }
+                    else
+                    {
+                        //lbl_loginfo.Invoke((MethodInvoker)delegate { lbl_loginfo.Text = "\nThere is a problem in the queue job status '" + jobState.ToString(); });
+
+                    Console.WriteLine(jobState);
+                }
+                
+                //else
+                //{
+                //    lbl_loginfo.Invoke((MethodInvoker)delegate { lbl_loginfo.Text = "Project '" + projName + "' already exist!!"; });
+                //}
+
+            }
+            catch (Exception ex)
+            {
+                lbl_loginfo.Invoke((MethodInvoker)delegate { lbl_loginfo.Text = "\nError: " + ex.Message; });
+
+
+            }
+            return newPublishedProj;
+
+        }
+        // Get the GUID of the specified enterprise project type.
+        private Guid GetEptUid(ProjectContext projContext, string eptName)
+        {
+            Guid eptUid = Guid.Empty;
+            try
+            {
+                //lbl_loginfo.Invoke((MethodInvoker)delegate { lbl_loginfo.Text = "Getting EPT ID"; });
+                // Get the list of EPTs that have the specified name. 
+                // If the EPT name exists, the list will contain only one EPT.
+                var eptList = projContext.LoadQuery(
+                    projContext.EnterpriseProjectTypes.Where(
+                        ept => ept.Name == eptName));
+                projContext.ExecuteQuery();
+                eptUid = eptList.First().Id;
+
+            }
+            catch (Exception ex)
+            {
+                string msg = string.Format("GetEptUid: eptName = \"{0}\"\n\n{1}",
+                    eptName, ex.GetBaseException().ToString());
+                lbl_loginfo.Invoke((MethodInvoker)delegate { lbl_loginfo.Text = msg; });
+                // lbl_loginfo.Text =  msg;
+            }
+            return eptUid;
+        }
+
+        private void backgroundWorkerCreateTask_DoWork(object sender, DoWorkEventArgs e)
+        {
+            schedule.CreateWBS();
+            string msg = string.Format("Creating Lookup Tables");
+            for (int i = 0; i < chk_TaskSelect.Items.Count; i++)
+            {
+                if (chk_TaskSelect.GetItemChecked(i))
+                {
+                    string str = (string)chk_TaskSelect.Items[i];
+                    if (str == "Projects")
+                    {
+                        foreach (var project in common.SourceProjContext.Projects)
+                        {
+                            //CreateProject(project.Name, project.Description, project.EnterpriseProjectType.Name, project.StartDate);
+
+
+                        }
+                    }
+                   else if (str == "Tasks")
+                    {
+
+                    }
+                    else if (str == "Custom Fields Creation")
+                    {
+                        custm.CreateLookupTables();
+                        custm.CreateCustomField();
+                        //custm.UpdateCustomFieldValue();
+                    }
+                    else if (str == "Custom Fields Update")
+                    {                      
+                        //custm.UpdateCustomFieldValue();
+                    }
+                }
+            }
+           
+           
+        }
+
+        private void timerLog_Tick(object sender, EventArgs e)
+        {
+            progressBarCreateTask.Value = progressBarCreateTask.Value + 1;
+
+            if (progressBarCreateTask.Value > 98)
+            {
+                progressBarCreateTask.Value = 94;
+            }
+        }
+
+
+
+    }
+
+
+}
