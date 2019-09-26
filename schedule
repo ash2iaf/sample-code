@@ -1,0 +1,115 @@
+using Microsoft.ProjectServer.Client;
+using Microsoft.SharePoint.Client;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Reflection;
+using System.Text;
+using System.Threading.Tasks;
+
+namespace MigrationUtility
+{
+    class Schedule
+    {
+
+        public void CreateWBS()
+        {
+
+            foreach (var project in common.SourceProjContext.Projects)
+            {
+                string ProjName = project.Name;
+                var projects = common.DestinationProjContext.Projects;
+                common.DestinationProjContext.Load(projects,
+    ps => ps.IncludeWithDefaultProperties(p => p.Name, p => p.Tasks).Where(p => p.Name == ProjName));
+
+                common.DestinationProjContext.ExecuteQuery();
+                PublishedProject DestinationPubProject = projects.FirstOrDefault();
+
+
+
+
+                TaskCreationInformation newTask;
+                var Source_projects = common.SourceProjContext.Projects;
+                common.SourceProjContext.Load(Source_projects, pss => pss.IncludeWithDefaultProperties(p => p.Name, p => p.Tasks).Where(p => p.Name == ProjName));
+                common.SourceProjContext.ExecuteQuery();
+                PublishedProject SourcePubProj = Source_projects.FirstOrDefault();
+
+                DraftProject draft = DestinationPubProject.Draft;
+                common.DestinationProjContext.WaitForQueue(draft.CheckIn(true), 50);
+                DraftProject projCheckedOut = DestinationPubProject.CheckOut();
+
+                DraftProject draft_Source = SourcePubProj.Draft;
+                common.SourceProjContext.WaitForQueue(draft_Source.CheckIn(true), 50);
+                DraftProject projCheckedOut_Source = SourcePubProj.CheckOut();
+                common.SourceProjContext.LoadQuery(projCheckedOut_Source.Tasks);
+                common.SourceProjContext.ExecuteQuery();
+                foreach (var item in SourcePubProj.Tasks)
+                {
+                    newTask = new TaskCreationInformation();
+                    newTask.Id = item.Id;
+                    newTask.Name = item.Name;
+                    newTask.IsManual = item.IsManual;
+                    newTask.Start = item.Start;
+                    newTask.Finish = item.Finish;
+                    newTask.Duration = item.Duration;
+                    newTask.Notes = item.Notes;
+
+                    projCheckedOut.Tasks.Add(newTask);
+                }
+                QueueJob qJob = projCheckedOut.Update();
+                projCheckedOut.Publish(true);
+                qJob = common.DestinationProjContext.Projects.Update();
+                JobState jobState = common.DestinationProjContext.WaitForQueue(qJob, common.timeoutSeconds);
+
+                if (jobState == JobState.Success)
+                {
+                    var projectColl = common.DestinationProjContext.LoadQuery(common.DestinationProjContext.Projects.Where(p => p.Name == ProjName));
+                    common.DestinationProjContext.ExecuteQuery();
+                    DestinationPubProject = projectColl.First();
+                    if (!DestinationPubProject.IsCheckedOut)
+                    {
+                        draft = DestinationPubProject.Draft;
+                        common.DestinationProjContext.WaitForQueue(draft.CheckIn(true), 50);
+                        projCheckedOut = DestinationPubProject.CheckOut();
+                    }
+                    common.DestinationProjContext.Load(projCheckedOut.Tasks);
+                    common.DestinationProjContext.ExecuteQuery();
+                    DraftTaskCollection getTask = projCheckedOut.Tasks;
+
+                    draft = DestinationPubProject.Draft;
+                    common.DestinationProjContext.WaitForQueue(draft.CheckIn(true), 50);
+                    projCheckedOut = DestinationPubProject.CheckOut();
+
+                    foreach (var item in SourcePubProj.Tasks)
+                    {
+                        Guid itemID = item.Id;
+                        //DraftTask drTask = getTask.GetById(item.Id.ToString());
+                        var aa = common.DestinationProjContext.LoadQuery(getTask.Where(p => p.Id == itemID));
+                        common.DestinationProjContext.ExecuteQuery();
+                        DraftTask drTask = aa.First();
+                        PropertyInfo[] properties = typeof(DraftTask).GetProperties();
+                        foreach (PropertyInfo property in properties)
+                        {
+                            try
+                            {
+                                property.SetValue(drTask[property.ToString()], item[property.ToString()]);
+                            }
+                            catch (Exception ex) { }
+                        }
+                    }
+                    qJob = projCheckedOut.Update();
+                    projCheckedOut.Publish(true);
+                    qJob = common.DestinationProjContext.Projects.Update();
+                    jobState = common.DestinationProjContext.WaitForQueue(qJob, common.timeoutSeconds);
+
+                }
+                else
+                {
+
+                }
+            }
+        }
+
+
+    }
+}
