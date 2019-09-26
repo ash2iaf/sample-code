@@ -1,0 +1,60 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Reflection;
+using System.Resources;
+using System.Text;
+using System.Threading.Tasks;
+
+namespace MigrationUtility
+{
+  public static class Logger
+    {
+        public static ResourceManager resourceManager = new ResourceManager("JiraScheduler.Resource1", Assembly.GetExecutingAssembly());
+
+        /// <summary>
+        /// Checks if Log file exists for the current date
+        /// </summary>
+        /// <returns></returns>
+        static StreamWriter checkWhetherFileExsist()
+        {
+            string logFilePath = "D:\\Toll\\Migration with Assignments\\MigrationUtility_FINAL (1)\\MigrationUtility_FINAL\\MigrationLogs\\";
+            // string logFilePath = ConfigurationManager.AppSettings["LogFilePath"].ToString();
+            //string logFilePath = resourceManager.GetString("LogFilePath");
+            //string logFileName = @logFilePath + "LogFile-" + DateTime.Now.ToString() + ".txt";
+            string logFileName = @logFilePath + "LogFile-" + DateTime.Now.Date.Minute + "-" + DateTime.Now.Date.Day + "-" + DateTime.Now.Date.Month + "-" + DateTime.Now.Date.Year + ".txt";
+
+            // This text is added only once to the file.
+            StreamWriter log;
+
+            if (!File.Exists(logFileName))
+            {
+                // Create a file to write to. 
+                log = File.CreateText(logFileName);
+            }
+
+            // This text is always added, making the file longer over time 
+            // if it is not deleted. 
+            else
+            {
+                log = File.AppendText(logFileName);
+            }
+            // Write to the file:
+            return log;
+        }
+
+        /// <summary>
+        /// Writes lines into the log file
+        /// </summary>
+        /// <param name="message"></param>
+        public static void WriteLog(string message)
+        {
+            StreamWriter log = checkWhetherFileExsist();
+            log.WriteLine(message);
+            log.WriteLine("\r\n");
+            log.Close();
+        }
+
+    }
+}
