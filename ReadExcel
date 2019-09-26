@@ -1,0 +1,480 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+using Microsoft.Office.Interop.Excel;
+using System.Runtime.InteropServices;
+using Microsoft.ProjectServer.Client;
+using Microsoft.SharePoint.Client;
+using System.Security;
+using System.Data;
+using Excel = Microsoft.Office.Interop.Excel;
+using System.Data.OleDb;
+using Dtable = System.Data;
+
+namespace MigrationUtility
+{
+    class ReadExcel
+    {
+        public static KeyValuePair<string, ProjectContext> Auth(String uname, String pwd, string siteURL)
+        {
+            ProjectContext Projcontext;
+
+
+            try
+            {
+                Projcontext = new ProjectContext(siteURL);
+                Web web = Projcontext.Web;
+                SecureString passWord = new SecureString();
+                foreach (char c in pwd.ToCharArray()) passWord.AppendChar(c);
+                Projcontext.Credentials = new SharePointOnlineCredentials(uname, passWord);
+
+                return new KeyValuePair<string, ProjectContext>("True", Projcontext);
+            }
+            catch (Exception e)
+            {
+
+                return new KeyValuePair<string, ProjectContext>("False", null);
+            }
+        }
+
+        public static void BuildTeam(ProjectContext context, Dtable.DataTable dt_SingleProjectResources, Guid id)
+        {
+            try
+            {
+                var resources = context.LoadQuery(context.EnterpriseResources.IncludeWithDefaultProperties(r => r.Id, r => r.Name));
+                context.ExecuteQuery();
+                PublishedProject publishedProject = context.Projects.GetByGuid(id);
+                DraftProject draftProject = publishedProject.Draft;
+                JobState jobState1 = context.WaitForQueue(draftProject.CheckIn(true), 200);
+
+                DraftProject checkedOutProject = publishedProject.CheckOut();
+
+                context.Load(checkedOutProject.ProjectResources);
+                context.ExecuteQuery();
+                foreach (Dtable.DataRow Rw_ResourceRow in dt_SingleProjectResources.Rows)
+                {
+                    string resourceName = Rw_ResourceRow[1].ToString();
+                    var resource = resources.Where(r => r.Name == resourceName);
+                    if (resource == null || resource.Count() == 0)
+                    {
+                        Console.WriteLine(resourceName + " not found in PWA");
+                        continue;
+                    }
+
+                    ProjectResourceCreationInformation res = new ProjectResourceCreationInformation();
+                    res.Id = resource.First().Id;
+                    res.Name = resource.First().Name;
+
+                    checkedOutProject.ProjectResources.AddEnterpriseResource(resource.First());
+                }
+
+                QueueJob queueJob1 = checkedOutProject.Update();
+                jobState1 = context.WaitForQueue(queueJob1, 200);
+                QueueJob queueJob2 = checkedOutProject.Publish(false);
+                jobState1 = context.WaitForQueue(queueJob2, 200);
+            }
+            catch (Exception ex)
+            {
+
+                Logger.WriteLog("BuildTeam method Project Name: " + dt_SingleProjectResources.Rows[0][0] + " " + ex.Message);
+
+            }
+        }
+        public static void TaskCreation(ProjectContext context, Dtable.DataTable dt_SingleProjectTask, Guid id)
+        {
+            try
+            {
+                PublishedProject publishedProject = context.Projects.GetByGuid(id);
+                DraftProject draftProject = publishedProject.Draft;
+                JobState jobState1 = context.WaitForQueue(draftProject.CheckIn(true), 200);
+
+                DraftProject checkedOutProject = publishedProject.CheckOut();
+
+                TaskCreationInformation newTask;
+                foreach (Dtable.DataRow dt_TaskRow in dt_SingleProjectTask.Rows)
+                {
+                    newTask = new TaskCreationInformation();
+                    newTask.Id = Guid.NewGuid();
+                    newTask.Name = dt_TaskRow[1].ToString();
+                    newTask.IsManual = true;
+
+                    DateTime startdate = Convert.ToDateTime(dt_TaskRow[2]);
+                    newTask.Start = startdate.AddHours(8);
+
+                    //DateTime FinishDate = Convert.ToDateTime(dt_TaskRow[3]);
+                    //newTask.Finish = FinishDate.AddHours(17);
+
+                    checkedOutProject.Tasks.Add(newTask);
+                }
+
+
+                QueueJob queueJob1 = checkedOutProject.Update();
+                jobState1 = context.WaitForQueue(queueJob1, 200);
+                QueueJob queueJob2 = checkedOutProject.Publish(false);
+                jobState1 = context.WaitForQueue(queueJob2, 200);
+            }
+            catch (Exception ex)
+            {
+                Logger.WriteLog("Taskcreation method Project Name: " + dt_SingleProjectTask.Rows[0][0] + " " + ex.Message);
+
+
+            }
+        }
+
+        public static void SetOutLine(ProjectContext context, Dtable.DataTable dt_SingleProjectTask, Guid id)
+        {
+            try
+            {
+                PublishedProject publishedProject = context.Projects.GetByGuid(id);
+                DraftProject draftProject = publishedProject.Draft;
+                JobState jobState1 = context.WaitForQueue(draftProject.CheckIn(true), 200);
+
+                DraftProject checkedOutProject = publishedProject.CheckOut();
+
+                context.Load(checkedOutProject.Tasks, t => t.IncludeWithDefaultProperties(ta => ta.ActualWork, ta => ta.Assignments, ta => ta.IsMilestone, ta => ta.Name, ta => ta.Id, ta => ta.OutlineLevel, ta => ta.OutlinePosition, ta => ta.Work, ta => ta.StatusManager, ta => ta.CustomFields, ta => ta.CustomFields.IncludeWithDefaultProperties(cf => cf.LookupTable, cf => cf.LookupEntries)));
+                context.ExecuteQuery();
+
+                DraftTaskCollection taskCol = checkedOutProject.Tasks;
+
+                var lookupTables = context.LookupTables;
+                context.Load(lookupTables, l => l.IncludeWithDefaultProperties(lo => lo.Entries));
+                context.ExecuteQuery();
+
+                //set Oracle Task Number.
+                var OracleTaskNumberlookup = lookupTables.Where(l => l.Name == "LT_OracleTaskNumber").FirstOrDefault();
+                foreach (Dtable.DataRow dt_TaskRow in dt_SingleProjectTask.Rows)
+                {
+                    string taskName = dt_TaskRow[1].ToString();
+                    //double startdate = double.Parse(dt_TaskRow[3].ToString());
+                    DateTime start = Convert.ToDateTime(dt_TaskRow[2].ToString());
+                    var task = taskCol.Where(t => t.Name == taskName && t.Start.Day == start.Day && t.Start.Month == start.Month && t.Start.Year == start.Year);
+
+                    if (task == null || task.Count() == 0)
+                    {
+                        Console.WriteLine("Task not found in Project tasks");
+                        continue;
+                    }
+
+                    string outlineLevel = dt_TaskRow[14].ToString();
+                    task.First().OutlineLevel = Convert.ToInt32(outlineLevel);
+
+
+                    //if (!(task.First().IsSummary))
+                    //{
+                    //    task.First().StatusManager = checkedOutProject.Owner;
+                    //}
+
+                    string strOracleTaskNumber = dt_TaskRow[4].ToString();
+                    string OracleTaskNumberValue = OracleTaskNumberlookup.Entries.Where(e => e.FullValue == strOracleTaskNumber).Select(e => e.InternalName).FirstOrDefault();
+                    task.First()["Custom_a2829a1524e7e81180d800155deccb15"] = new String[] { OracleTaskNumberValue };
+
+                    string strTaskType = dt_TaskRow[8].ToString();
+                    if (strTaskType == "Milestone")
+                    {
+                        task.First().IsMilestone = true;
+                    }
+                }
+
+
+                QueueJob queueJob1 = checkedOutProject.Update();
+                jobState1 = context.WaitForQueue(queueJob1, 200);
+                QueueJob queueJob2 = checkedOutProject.Publish(false);
+                jobState1 = context.WaitForQueue(queueJob2, 200);
+                //checkedOutProject.CheckIn(false);
+                QueueJob queueJob3 = context.Projects.Update();
+                jobState1 = context.WaitForQueue(queueJob3, 200);
+                context.ExecuteQuery();
+            }
+            catch (Exception ex)
+            {
+
+                Logger.WriteLog("SetOutline method Project Name: " + dt_SingleProjectTask.Rows[0][0] + " " + ex.Message);
+            }
+
+        }
+
+        public static void AddAssignment(ProjectContext context, Dtable.DataTable dt_SingleProjectAssignment, Guid id)
+        {
+            try
+            {
+                PublishedProject publishedProject = context.Projects.GetByGuid(id);
+                DraftProject draftProject = publishedProject.Draft;
+                JobState jobState1 = context.WaitForQueue(draftProject.CheckIn(true), 200);
+
+                DraftProject checkedOutProject = publishedProject.CheckOut();
+
+
+                context.Load(checkedOutProject.Tasks, t => t.IncludeWithDefaultProperties(ta => ta.ActualWork, ta => ta.Assignments, ta => ta.IsMilestone, ta => ta.Name, ta => ta.Id, ta => ta.OutlineLevel, ta => ta.OutlinePosition, ta => ta.Work, ta => ta.StatusManager));
+                context.ExecuteQuery();
+
+                context.Load(checkedOutProject.ProjectResources, r => r.IncludeWithDefaultProperties(re => re.Id, re => re.Name));
+                context.ExecuteQuery();
+
+
+                DraftTaskCollection taskCollection = checkedOutProject.Tasks;
+
+                AssignmentCreationInformation newAssignment;
+                foreach (Dtable.DataRow dt_TaskRow in dt_SingleProjectAssignment.Rows)
+                {
+                    string resourceName = dt_TaskRow[1].ToString().Trim();
+                    string taskName = dt_TaskRow[2].ToString().Trim();
+
+                    
+                    DateTime start = Convert.ToDateTime(dt_TaskRow[3].ToString());
+                    DateTime Finish =  Convert.ToDateTime(dt_TaskRow[4].ToString());
+                    //code commented on 23Jan
+                    //var task = taskCollection.Where(t => t.Name == taskName && t.Start.Day == start.Day && t.Start.Month == start.Month && t.Start.Year == start.Year);
+                    var task = taskCollection.Where(t => t.Name == taskName);
+
+                    if (task == null || task.Count() == 0)
+                    {
+                        Console.WriteLine("Task not found in Project tasks");
+                        continue;
+                    }
+                    //string actualWork = dt_TaskRow[6].ToString().Split()[0];
+                    //string work = dt_TaskRow[17].ToString().Split()[0];
+
+                    //task.First().ActualWork = (Convert.ToDecimal(task.First().ActualWork.Replace("h", "")) + Convert.ToDecimal(actualWork)).ToString() + "h";
+                    //task.First().Work = (Convert.ToDecimal(task.First().Work.Replace("h", "")) + Convert.ToDecimal(work)).ToString() + "h";
+
+
+                    var res = checkedOutProject.ProjectResources.Where(r => r.Name == resourceName);
+                    if (res == null || res.Count() == 0)
+                    {
+                        Console.WriteLine("Task - " + taskName + " can not be assigned as " + resourceName + " does not exist in PWA");
+                        Logger.WriteLog("AddAssignment method Resource Name for which assignment getting not created :" + resourceName );
+                        continue;
+                    }
+
+                    newAssignment = new AssignmentCreationInformation();
+                    newAssignment.Id = Guid.NewGuid();
+                    newAssignment.TaskId = task.First().Id;
+                    newAssignment.ResourceId = res.First().Id;
+                    newAssignment.Start = start;
+
+                    Logger.WriteLog("AddAssignment method Resource Name for which assignment getting created :" + newAssignment.ResourceId);
+                    //newAssignment.Finish = Finish;
+                    //assn.Finish = Convert.ToDateTime(dt_TaskRow[4].ToString().Trim()).AddHours(17);
+                    Logger.WriteLog("AddAssignment method Resource Name for which assignment getting created :" + resourceName);
+                    task.First().Assignments.Add(newAssignment);
+                    checkedOutProject.Assignments.Add(newAssignment);
+                }
+
+                QueueJob queueJob1 = checkedOutProject.Update();
+                jobState1 = context.WaitForQueue(queueJob1, 200);
+                QueueJob queueJob2 = checkedOutProject.Publish(false);
+                jobState1 = context.WaitForQueue(queueJob2, 200);
+                checkedOutProject.CheckIn(false);
+                QueueJob queueJob3 = context.Projects.Update();
+                jobState1 = context.WaitForQueue(queueJob3, 200);
+                context.ExecuteQuery();
+            }
+            catch (Exception ex)
+            {
+                Logger.WriteLog("AddAssignment method Project Name: " + dt_SingleProjectAssignment.Rows[0][0] + " " + ex.Message);
+
+            }
+        }
+        public static void ReadExcelFile()
+        {
+            try
+            {
+                //string fileName = "D:\\Anil Data\\Toll\\data migration\\R3822h - MyToll FY19 Releases_Rupesh.xlsx";
+                string fileName = "D:\\Toll\\Migration with Assignments\\R3822h - MyToll FY19 Releases_Rupesh.xlsx";
+                // string fileName = "D:\\Toll\\Migration with Assignments\\ScheduleData_Sorted_Proj2.xlsx";
+
+                var obj = Auth("anil.kumar@tollgroup.com", "Kqq75j44", "https://tollgroup.sharepoint.com/sites/PWADev/");
+                //var obj = Auth("ProjectonlinePremium@ProjectonlinePremium.onmicrosoft.com", "password321@", "https://projectonlinepremium.sharepoint.com/sites/PWA4");
+                ProjectContext context = obj.Value;
+                context.Load(context.Projects, c => c.IncludeWithDefaultProperties(p => p.Id, p => p.Name));
+                context.ExecuteQuery();
+
+                #region Read Excel and Convert in Data table
+                Dtable.DataTable dt_TaskData = ConvertExcelToDataTable(fileName, "TaskData$");
+                DataView view = new DataView(dt_TaskData);
+                Dtable.DataTable dt_DistinctProject = view.ToTable(true, "Project Name");
+
+
+                foreach (Dtable.DataRow dt_singleProjectInfo in dt_DistinctProject.Rows) // Loop for all distinct projects
+                {
+
+                    try
+                    {
+
+                        var publishedProject = context.Projects.Where(q => q.Name == dt_singleProjectInfo[0].ToString());
+                        if (publishedProject.Count() > 0)
+                        {
+                            Guid id = publishedProject.First().Id;
+
+                            dt_TaskData.DefaultView.RowFilter = "[Project Name] = '" + dt_singleProjectInfo[0] + "'";
+                            Dtable.DataTable dt_SingleProjectTask = (dt_TaskData.DefaultView).ToTable();
+                           TaskCreation(context, dt_SingleProjectTask, id);
+
+
+
+                            Dtable.DataTable dt_ResourceData = ConvertExcelToDataTable(fileName, "ResourceData$");
+                            dt_ResourceData.DefaultView.RowFilter = "[Project Name] = '" + dt_singleProjectInfo[0] + "'";
+                            Dtable.DataTable dt_SingleProjectResources = (dt_ResourceData.DefaultView).ToTable();
+                           BuildTeam(context, dt_SingleProjectResources, id);
+
+
+                            SetOutLine(context, dt_SingleProjectTask, id);
+
+                            Dtable.DataTable dt_AssignmentData = ConvertExcelToDataTable(fileName, "AssignmentData$");
+                            dt_AssignmentData.DefaultView.RowFilter = "[Project Name] = '" + dt_singleProjectInfo[0] + "'";
+                            Dtable.DataTable dt_SingleProjectAssignment = (dt_AssignmentData.DefaultView).ToTable();
+                            AddAssignment(context, dt_SingleProjectAssignment, id);
+
+                            UpdateAssignment(context, dt_SingleProjectAssignment, id);
+                        }
+                    }
+
+                    catch (Exception ex)
+                    {
+
+
+                        Logger.WriteLog("ReadExcelFile method Project Name: " + dt_singleProjectInfo[0] + " " + ex.Message);
+                    }
+                }
+
+            }
+            catch (Exception ex)
+            {
+
+                Logger.WriteLog("ReadExcelFile method Main try catch exception: " + ex.Message);
+            }
+            #endregion
+        }
+
+        public static Dtable.DataTable ConvertExcelToDataTable(string FileName, string SheetName)
+        {
+
+            Dtable.DataTable dtResult = null;
+
+            using (OleDbConnection objConn = new OleDbConnection(@"Provider=Microsoft.ACE.OLEDB.12.0;Data Source=" + FileName + ";Extended Properties='Excel 12.0;HDR=YES;IMEX=1;';"))
+            {
+                try
+                {
+                    objConn.Open();
+                    OleDbCommand cmd = new OleDbCommand();
+                    OleDbDataAdapter oleda = new OleDbDataAdapter();
+                    DataSet ds = new DataSet();
+                    Dtable.DataTable dt = objConn.GetOleDbSchemaTable(OleDbSchemaGuid.Tables, null);
+                    string sheetName = string.Empty;
+                    //if (dt != null)
+                    //{
+                    //    var tempDataTable = (from dataRow in dt.AsEnumerable()
+                    //                         where !dataRow["TABLE_NAME"].ToString().Contains("FilterDatabase")
+                    //                         select dataRow).CopyToDataTable();
+                    //    dt = tempDataTable;
+                    //    totalSheet = dt.Rows.Count;
+                    //    sheetName = dt.Rows[0]["TABLE_NAME"].ToString();
+                    //}
+                    cmd.Connection = objConn;
+                    cmd.CommandType = CommandType.Text;
+                    cmd.CommandText = "SELECT * FROM [" + SheetName + "]";
+                    oleda = new OleDbDataAdapter(cmd);
+                    oleda.Fill(ds, SheetName);
+                    dtResult = ds.Tables[SheetName];
+                    objConn.Close();
+                }
+
+                catch (Exception ex)
+                {
+                    Logger.WriteLog(ex.Message);
+                }
+                return dtResult; //Returning Dattable
+                                 // return ds;
+            }
+
+        }
+
+        public static void UpdateAssignment(ProjectContext context, Dtable.DataTable dt_SingleProjectAssignment, Guid id)
+        {
+            try
+            {
+                var resources = context.LoadQuery(context.EnterpriseResources.IncludeWithDefaultProperties(r => r.Id, r => r.Name));
+                context.ExecuteQuery();
+                PublishedProject publishedProject = context.Projects.GetByGuid(id);
+                DraftProject draftProject = publishedProject.Draft;
+                JobState jobState1 = context.WaitForQueue(draftProject.CheckIn(true), 200);
+
+                DraftProject checkedOutProject = publishedProject.CheckOut();
+
+                context.Load(checkedOutProject.ProjectResources);
+                context.ExecuteQuery();
+
+                context.Load(checkedOutProject.Tasks, t => t.IncludeWithDefaultProperties(ta => ta.ActualWork, ta => ta.Assignments, ta => ta.IsMilestone, ta => ta.Name, ta => ta.Id, ta => ta.OutlineLevel, ta => ta.OutlinePosition, ta => ta.Work, ta => ta.StatusManager));
+                context.ExecuteQuery();
+                DraftTaskCollection taskCollection = checkedOutProject.Tasks;
+                foreach (Dtable.DataRow dt_TaskRow in dt_SingleProjectAssignment.Rows)
+                {
+                    string resourceName = dt_TaskRow[1].ToString().Trim();
+                    string taskName = dt_TaskRow[2].ToString().Trim();
+
+
+                    DateTime start = Convert.ToDateTime(dt_TaskRow[11].ToString());
+
+                    var task = taskCollection.Where(t => t.Name == taskName && t.IsSummary == false);
+
+                    if (task == null || task.Count() == 0)
+                    {
+                        Console.WriteLine("Assignment not found for this task");
+                        continue;
+                    }
+
+                    try
+                    {
+                        var res = checkedOutProject.ProjectResources.Where(r => r.Name == dt_TaskRow[1].ToString().Trim());
+                        EnterpriseResource er = context.EnterpriseResources.GetByGuid(res.First().Id);
+                        context.Load(er.Assignments, ass => ass.IncludeWithDefaultProperties(p => p.Project.Name));
+                        context.ExecuteQuery();
+                        StatusAssignment assn = er.Assignments.Where(tsk => tsk.Name == dt_TaskRow[2].ToString().Trim() && tsk.Project.Name == dt_TaskRow[0].ToString().Trim()).First();
+
+
+                        assn.Start = Convert.ToDateTime(dt_TaskRow[3].ToString().Trim()).AddHours(8);
+                        assn.Finish = Convert.ToDateTime(dt_TaskRow[4].ToString().Trim()).AddHours(17);
+                        assn.Work = dt_TaskRow[17].ToString().Trim();
+                        assn.ActualWork = dt_TaskRow[6].ToString().Trim();
+                        assn.SubmitStatusUpdates("update");
+                        context.ExecuteQuery();
+
+                       
+                    }
+                    catch (Exception ex)
+                    {
+                        Logger.WriteLog("UpdateAssignment method Project Name: " + dt_TaskRow[0] + " " + ex.Message + resourceName + taskName);
+                    }
+
+                }
+                QueueJob queueJob1 = checkedOutProject.Update();
+                jobState1 = context.WaitForQueue(queueJob1, 200);
+                QueueJob queueJob2 = checkedOutProject.Publish(true);
+                jobState1 = context.WaitForQueue(queueJob2, 200);
+                checkedOutProject.CheckIn(true);
+                QueueJob queueJob3 = context.Projects.Update();
+                jobState1 = context.WaitForQueue(queueJob3, 200);
+                context.ExecuteQuery();
+
+                checkedOutProject = publishedProject.CheckOut();
+                QueueJob queueJob4 = checkedOutProject.Update();
+                jobState1 = context.WaitForQueue(queueJob4, 200);
+                QueueJob queueJob5 = checkedOutProject.Publish(true);
+                jobState1 = context.WaitForQueue(queueJob5, 200);
+                checkedOutProject.CheckIn(true);
+                QueueJob queueJob6 = context.Projects.Update();
+                jobState1 = context.WaitForQueue(queueJob6, 200);
+                context.ExecuteQuery();
+            }
+            catch (Exception ex)
+            {
+                Logger.WriteLog("UpdateAssignment method Project Name: " + dt_SingleProjectAssignment.Rows[0][0] + " " + ex.Message);
+            }
+        }
+        
+
+
+    }
+}
