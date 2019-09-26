@@ -1,0 +1,351 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+using Microsoft.ProjectServer.Client;
+using Microsoft.SharePoint.Client;
+using System.Windows.Forms;
+
+namespace MigrationUtility
+{
+   
+   public class CustomFields
+    {
+
+        List<LookupMask> ListOfMasks = new List<LookupMask>();
+        List<LookupEntryCreationInformation> ListOfEntries = new List<LookupEntryCreationInformation>();
+        //TaskCreation tskfrm = new TaskCreation();
+        public void CreateLookupTables()
+        {
+            IEnumerable<LookupTable> lookuptables = common.SourceProjContext.LoadQuery(common.SourceProjContext.LookupTables);
+            common.SourceProjContext.ExecuteQuery();
+
+
+            foreach (LookupTable tbl in lookuptables)
+            {
+               // tskfrm.lbl_loginfo.Invoke((MethodInvoker)delegate { tskfrm.lbl_loginfo.Text = "Creating LookupTable '" + tbl.Name; });
+                ListOfMasks = new List<LookupMask>();
+                ListOfEntries = new List<LookupEntryCreationInformation>();
+                foreach (LookupMask msk in tbl.Masks)
+                {
+                    ReadLookupMask(msk.Length, msk.MaskType, msk.Separator);
+                }
+
+                common.SourceProjContext.Load(tbl.Entries);
+
+                common.SourceProjContext.ExecuteQuery();
+                foreach (LookupEntry en in tbl.Entries)
+                {
+                    var jj = tbl.Masks.FirstOrDefault();
+                    char sap = jj.Separator[0];
+                    string jjj = en.FullValue.Replace(sap.ToString() + en.FullValue.Split(sap)[en.FullValue.Split(sap).Length - 1].ToString(), "").ToString();
+                    var hhh = (tbl.Entries.AsEnumerable().Where(x => x.FullValue == en.FullValue.Replace((en.FullValue.Split(sap).Length > 1 ? sap.ToString() : "") + en.FullValue.Split(sap)[en.FullValue.Split(sap).Length - 1].ToString(), "").ToString()).FirstOrDefault());
+                    string Value = en.FullValue.Split(sap)[en.FullValue.Split(sap).Length - 1].ToString();
+                    Guid ParentId = hhh == null ? Guid.Empty : hhh.Id;
+                    ReadLookupEntries(en.Id, en.InternalName, en.Description, en.SortIndex, Value, ParentId);
+                }
+                IEnumerable<LookupTable> Destinationlookuptables = common.DestinationProjContext.LoadQuery(common.DestinationProjContext.LookupTables);
+                common.DestinationProjContext.ExecuteQuery();
+
+                int IsLookupTableExist = Destinationlookuptables.Where(p => p.Name == tbl.Name).Count();
+                if (IsLookupTableExist == 0)
+                {
+                    LookupTableCreationInformation NewLookupTable = new LookupTableCreationInformation();
+                    NewLookupTable.Id = new Guid();
+                    NewLookupTable.Name = tbl.Name;
+                    NewLookupTable.SortOrder = tbl.SortOrder;
+                    NewLookupTable.Masks = ListOfMasks;
+                    NewLookupTable.Entries = ListOfEntries;
+
+                    common.DestinationProjContext.LookupTables.Add(NewLookupTable);
+                    common.DestinationProjContext.LookupTables.Update();
+                    common.DestinationProjContext.ExecuteQuery();
+                }
+                //tskfrm.lbl_loginfo.Invoke((MethodInvoker)delegate { tskfrm.lbl_loginfo.Text = "Created LookupTable '" + tbl.Name; });
+            }
+
+
+        }
+
+
+        public void ReadLookupMask(int Length, LookupTableMaskSequence MaskType, string Separator)
+        {
+            LookupMask mask = new LookupMask();
+            mask.Length = Length;
+            mask.MaskType = MaskType;
+            mask.Separator = Separator;
+            ListOfMasks.Add(mask);
+        }
+
+
+
+        public void ReadLookupEntries(Guid Id, string InternalName, string Description, decimal SortIndex, string Value, Guid ParentId)
+        {
+            LookupEntryCreationInformation LookupEntry = new LookupEntryCreationInformation();
+            LookupEntry.Description = Description;
+
+            LookupEntry.Id = Id;
+            LookupEntry.Value = new LookupEntryValue();
+            LookupEntry.Value.TextValue = Value;
+            LookupEntry.ParentId = ParentId;
+
+            LookupEntry.SortIndex = SortIndex;
+
+            ListOfEntries.Add(LookupEntry);
+        }
+        public void CreateCustomField()
+        {
+            common.SourceProjContext.Load(common.SourceProjContext.CustomFields, cs => cs.IncludeWithDefaultProperties(pr => pr.EntityType, pr => pr.FieldType, pr => pr.LookupTable, pr => pr.LookupTable.Name, pr => pr.LookupEntries));
+            common.SourceProjContext.ExecuteQuery();
+
+
+            common.DestinationProjContext.Load(common.DestinationProjContext.CustomFields, cs => cs.IncludeWithDefaultProperties(pr => pr.EntityType, pr => pr.FieldType, pr => pr.LookupTable, pr => pr.LookupTable.Name, pr => pr.LookupEntries));
+            common.DestinationProjContext.ExecuteQuery();
+
+            foreach (CustomField csField in common.SourceProjContext.CustomFields)
+            {
+
+                if (csField.LookupTable.ServerObjectIsNull == true)
+                {
+                    //Create Non Lookup type custom field
+                    NonLookupTypeCustomFieldCreation(csField.Id, csField.Name, csField.Description, csField.IsWorkflowControlled, csField.IsRequired, csField.IsEditableInVisibility, csField.IsMultilineText, csField.FieldType, csField.EntityType);
+                }
+                else
+                {
+                    //Create Lookup type custom field
+                    LookupTypeCustomFieldCreation(csField.Id, csField.LookupTable.Name, csField.Name, csField.Description, csField.IsWorkflowControlled, csField.IsRequired, csField.IsEditableInVisibility, csField.IsMultilineText, csField.FieldType, csField.EntityType);
+                }
+            }
+        }
+        public void LookupTypeCustomFieldCreation(Guid csFieldId, string LookupTableName, string CustomFieldName, string CustomFieldDesc, bool IsWorkflowControlled, bool IsRequired, bool IsEditableInVisibility, bool IsMultilineText, CustomFieldType Type, EntityType EType)
+        {
+            LookupTableCollection LookuptablColl = common.DestinationProjContext.LookupTables;
+            common.DestinationProjContext.Load(LookuptablColl);
+
+            var customfieldcoll = common.DestinationProjContext.LoadQuery(common.DestinationProjContext.CustomFields
+               .Where(pr => pr.Name == CustomFieldName)); //Enter Your Custom Field Name
+            common.DestinationProjContext.ExecuteQuery();
+            if (customfieldcoll.ToList().Count == 0)
+            {
+                //tskfrm.lbl_loginfo.Invoke((MethodInvoker)delegate { tskfrm.lbl_loginfo.Text = "Creating CustomField '" + CustomFieldName; });
+                var projLutCollection = common.DestinationProjContext.LoadQuery(common.DestinationProjContext.LookupTables
+                     .Where(lut => lut.Name == LookupTableName));
+
+                common.DestinationProjContext.ExecuteQuery();
+                if (projLutCollection.ToList().Count > 0)
+                {
+                    LookupTable lookupktbl = projLutCollection.Last();
+                    CustomFieldCreationInformation NewfieldInfo = new CustomFieldCreationInformation();
+
+                    NewfieldInfo.Id = new Guid();
+                    NewfieldInfo.Name = CustomFieldName;
+                    NewfieldInfo.LookupTable = lookupktbl;  //Enter Existing Lookup Table Name through wich you want to bind
+                    NewfieldInfo.Description = CustomFieldDesc;
+                    NewfieldInfo.IsWorkflowControlled = IsWorkflowControlled;
+                    NewfieldInfo.IsRequired = IsRequired;
+                    NewfieldInfo.IsEditableInVisibility = IsEditableInVisibility;
+                    NewfieldInfo.IsMultilineText = IsMultilineText;
+                    NewfieldInfo.FieldType = Type;//Field Tpye you can change like COST, Date, Number etc.
+                    EntityTypes Entitytype = common.DestinationProjContext.EntityTypes;
+                    switch (EType.Name)
+                    {
+                        case "Project":
+                            NewfieldInfo.EntityType = Entitytype.ProjectEntity;
+                            break;
+                        case "Resource":
+                            NewfieldInfo.EntityType = Entitytype.ResourceEntity;
+                            break;
+                        case "Task":
+                            NewfieldInfo.EntityType = Entitytype.TaskEntity;
+                            break;
+                    }
+
+                    common.DestinationProjContext.CustomFields.Add(NewfieldInfo);
+                    common.DestinationProjContext.CustomFields.Update();
+                    common.DestinationProjContext.ExecuteQuery();
+                   // tskfrm.lbl_loginfo.Invoke((MethodInvoker)delegate { tskfrm.lbl_loginfo.Text = "Created CustomField '" + CustomFieldName; });
+                    //foreach (PublishedProject Project in common.DestinationProjContext.Projects)
+                    //{
+                    //    DraftProject draftProject = null;
+
+                    //    draftProject = Project.CheckOut();
+                    //    draftProject.CustomFields.Add(NewfieldInfo);
+                    //    common.DestinationProjContext.Load(draftProject.CustomFields);
+                    //    common.DestinationProjContext.ExecuteQuery();
+                    //    QueueJob queueJobTask = null;
+                    //    queueJobTask = draftProject.Update();
+                    //    queueJobTask = draftProject.Publish(true);
+
+                    //}
+                }
+
+            }
+        }
+        public void NonLookupTypeCustomFieldCreation(Guid csFieldId, string CustomFieldName, string CustomFieldDesc, bool IsWorkflowControlled, bool IsRequired, bool IsEditableInVisibility, bool IsMultilineText, CustomFieldType Type, EntityType EType)
+        {
+
+            var customfieldcoll = common.DestinationProjContext.LoadQuery(common.DestinationProjContext.CustomFields
+                .Where(pr => pr.Name == CustomFieldName));// Enter Custom Field Name to check if already exist or not
+            common.DestinationProjContext.ExecuteQuery();
+            if (customfieldcoll.ToList().Count == 0)
+            {
+                //tskfrm.lbl_loginfo.Invoke((MethodInvoker)delegate { tskfrm.lbl_loginfo.Text = "Creating CustomField '" + CustomFieldName; });
+                CustomFieldCreationInformation NewfieldInfo = new CustomFieldCreationInformation();
+
+                NewfieldInfo.Id = new Guid();
+                NewfieldInfo.Name = CustomFieldName;
+
+                NewfieldInfo.Description = CustomFieldDesc;
+                NewfieldInfo.IsWorkflowControlled = IsWorkflowControlled;
+                NewfieldInfo.IsRequired = IsRequired;
+                NewfieldInfo.IsEditableInVisibility = IsEditableInVisibility;
+                NewfieldInfo.IsMultilineText = IsMultilineText;
+                NewfieldInfo.FieldType = Type;//Field Tpye you can change like COST, Date, Number etc.
+                EntityTypes Entitytype = common.DestinationProjContext.EntityTypes;
+                switch (EType.Name)
+                {
+                    case "Project":
+                        NewfieldInfo.EntityType = Entitytype.ProjectEntity;
+                        break;
+                    case "Resource":
+                        NewfieldInfo.EntityType = Entitytype.ResourceEntity;
+                        break;
+                    case "Task":
+                        NewfieldInfo.EntityType = Entitytype.TaskEntity;
+                        break;
+                }
+
+                common.DestinationProjContext.CustomFields.Add(NewfieldInfo);
+                common.DestinationProjContext.CustomFields.Update();
+                common.DestinationProjContext.ExecuteQuery();
+               // tskfrm.lbl_loginfo.Invoke((MethodInvoker)delegate { tskfrm.lbl_loginfo.Text = "Created CustomField '" + CustomFieldName; });
+                //foreach (PublishedProject Project in common.DestinationProjContext.Projects)
+                //{
+                //    DraftProject draftProject = null;
+                   
+                //    draftProject = Project.CheckOut();
+                //    draftProject.CustomFields.Add(NewfieldInfo);
+                //    common.DestinationProjContext.Load(draftProject.CustomFields);
+                //    common.DestinationProjContext.ExecuteQuery();
+                //    QueueJob queueJobTask = null;
+                //    queueJobTask = draftProject.Update();
+                //    queueJobTask = draftProject.Publish(true);
+
+                //}
+            }
+
+        }
+
+        public void UpdateCustomFieldValue()
+        {
+
+            foreach (PublishedProject Project in common.SourceProjContext.Projects)
+            {
+                common.SourceProjContext.Load(Project.IncludeCustomFields);
+                common.SourceProjContext.Load(Project.IncludeCustomFields.CustomFields, cs => cs.IncludeWithDefaultProperties(pr => pr.EntityType, pr => pr.FieldType, pr => pr.LookupTable, pr => pr.LookupTable.Name, pr => pr.LookupEntries));
+                common.SourceProjContext.ExecuteQuery();
+
+                string ProjectName = Project.Name;
+
+                var projectColl = common.DestinationProjContext.LoadQuery(common.DestinationProjContext.Projects.Where(p => p.Name == ProjectName));
+
+                common.DestinationProjContext.ExecuteQuery();
+                if (projectColl.ToList().Count() > 0)
+                {
+                    PublishedProject pubProj = projectColl.First();
+
+                    common.DestinationProjContext.Load(pubProj.IncludeCustomFields.CustomFields);
+                    common.DestinationProjContext.ExecuteQuery();
+                    common.DestinationProjContext.Load(pubProj.CustomFields, cs => cs.IncludeWithDefaultProperties(pr => pr.EntityType, pr => pr.FieldType, pr => pr.LookupTable, pr => pr.LookupTable.Name, pr => pr.LookupEntries));
+                    common.DestinationProjContext.ExecuteQuery();
+
+                    DraftProject draft = pubProj.Draft;
+                    JobState job1 = common.DestinationProjContext.WaitForQueue(draft.CheckIn(true), 50);
+                    DraftProject projCheckedOut = pubProj.CheckOut();
+
+                    foreach (var cust in Project.IncludeCustomFields.FieldValues)
+                    {
+
+                        string CustomFieldName = Project.IncludeCustomFields.CustomFields.ToList().Where(pr => pr.InternalName == cust.Key).ToList().Count == 0 ? string.Empty : Project.IncludeCustomFields.CustomFields.ToList().Where(pr => pr.InternalName == cust.Key).ToList()[0].Name;
+                        string DestCFIntername = pubProj.CustomFields.ToList().Where(pr => pr.Name == CustomFieldName).ToList().Count == 0 ? string.Empty : pubProj.CustomFields.ToList().Where(pr => pr.Name == CustomFieldName).ToList()[0].InternalName;
+
+                       // tskfrm.lbl_loginfo.Invoke((MethodInvoker)delegate { tskfrm.lbl_loginfo.Text = "Updating CustomField '" + CustomFieldName; });
+                        string CustomFieldID = cust.Key.ToString();
+                        string CustomFieldValue =Convert.ToString( cust.Value);
+                        if (DestCFIntername != string.Empty)
+                        {
+                            if (CustomFieldValue == "System.String[]")
+                            {
+                                string LookupTableName = Project.IncludeCustomFields.CustomFields.ToList().Where(pr => pr.InternalName == cust.Key).ToList().Count == 0 ? string.Empty : Project.IncludeCustomFields.CustomFields.ToList().Where(pr => pr.InternalName == cust.Key).ToList()[0].LookupTable.Name;
+
+                                var lookup = common.SourceProjContext.LoadQuery(common.SourceProjContext.LookupTables.Where(x => x.Name == LookupTableName));
+                                common.SourceProjContext.ExecuteQuery();
+                                string LookupTypeCustomFieldValue = string.Empty;
+                                foreach (LookupTable tbl in lookup)
+                                {
+                                    common.SourceProjContext.Load(tbl.Entries);
+                                    common.SourceProjContext.ExecuteQuery();
+                                    foreach (LookupEntry en in tbl.Entries)
+                                    {
+                                        for (int i = 0; i < ((string[])(cust.Value)).Count(); i++)
+                                        {
+                                            string cmp = ((string[])(cust.Value))[i].ToString();
+                                            string ent = en.Id.ToString().Replace("-", "");
+                                            if (cmp == "Entry_" + ent)
+                                            {
+                                                common.DestinationProjContext.WaitForQueue(draft.CheckIn(true), 50);
+                                                projCheckedOut = pubProj.CheckOut();
+                                                LookupTypeCustomFieldValue += en.FullValue;
+
+                                                var lookup_Dest = common.DestinationProjContext.LoadQuery(common.DestinationProjContext.LookupTables.Where(x => x.Name == LookupTableName));
+                                                common.DestinationProjContext.ExecuteQuery();
+                                                common.DestinationProjContext.Load(lookup_Dest.ToList()[0].Entries);
+                                                common.DestinationProjContext.ExecuteQuery();
+
+                                                Guid SourceEntryGUID = lookup_Dest.ToList()[0].Entries.Where(pr => pr.FullValue == LookupTypeCustomFieldValue).ToList()[0].Id;
+
+                                                projCheckedOut.SetCustomFieldValue(DestCFIntername, new object[] { SourceEntryGUID.ToString() });
+                                                projCheckedOut.Update();
+                                                common.DestinationProjContext.Load(projCheckedOut);
+                                                projCheckedOut.Publish(true);
+                                                common.DestinationProjContext.ExecuteQuery();
+                                                common.DestinationProjContext.Projects.Update();
+                                                common.DestinationProjContext.ExecuteQuery();
+                                                projCheckedOut.Publish(true);
+                                                JobState jobState = common.DestinationProjContext.WaitForQueue(common.DestinationProjContext.Projects.Update(), 10);
+                                               // tskfrm.lbl_loginfo.Invoke((MethodInvoker)delegate { tskfrm.lbl_loginfo.Text = "Updated CustomField '" + CustomFieldName; });
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            else
+                            {
+                                common.DestinationProjContext.WaitForQueue(draft.CheckIn(true), 50);
+                                projCheckedOut = pubProj.CheckOut();
+                                projCheckedOut.SetCustomFieldValue(DestCFIntername, CustomFieldValue);
+                                projCheckedOut.Update();
+                                common.DestinationProjContext.Load(projCheckedOut);
+                                projCheckedOut.Publish(true);
+                                common.DestinationProjContext.ExecuteQuery();
+                                common.DestinationProjContext.Projects.Update();
+                                common.DestinationProjContext.ExecuteQuery();
+                                projCheckedOut.Publish(true);
+                               // tskfrm.lbl_loginfo.Invoke((MethodInvoker)delegate { tskfrm.lbl_loginfo.Text = "Updated CustomField '" + CustomFieldName; });
+                            }
+
+
+                        }
+
+
+                    }
+
+
+                }
+            }
+
+        }
+
+    }
+}
